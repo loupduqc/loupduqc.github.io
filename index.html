@@ -12,7 +12,6 @@
 		
 		if(document.location.hash == ""){// didn't get the token yet
 			window.location.href = `https://id.twitch.tv/oauth2/authorize?client_id=${clientId}&response_type=token&scope=channel:read:redemptions+channel:manage:redemptions&redirect_uri=https://loupduqc.github.io/`;
-			return;
 		}
 		let hashData = {};
 		decodeURIComponent(document.location.hash).replace("#", "").split("&").forEach(line => {
