@@ -4,8 +4,56 @@
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
 	<title>Document</title>
+	<script>
+		const apiRoot = "https://api.twitch.tv/helix";//prod
+		// const apiRoot = "http://localhost:8080/mock";//dev
+		const clientId = "hdree6yqc2ocem1fih17q6s3zlk4fs"
+		// const clientId = "d4abf18e7c5d76f74e2d2b72b628a2"
+		
+		if(document.location.hash == ""){// didn't get the token yet
+			window.location.href = `https://id.twitch.tv/oauth2/authorize?client_id=${clientId}&response_type=token&scope=channel:read:redemptions+channel:manage:redemptions&redirect_uri=https://loupduqc.github.io/`;
+			return;
+		}
+		let hashData = {};
+		decodeURIComponent(document.location.hash).replace("#", "").split("&").forEach(line => {
+			let splitLine = line.split("=");
+			hashData[splitLine[0]] = splitLine[1];
+		});
+		debugger;
+		
+		
+		let user;
+		let token = hashData.access_token;
+		let headers = {
+			"Client-Id": clientId,
+			"Authorization": `Bearer ${token}`,
+			'accept': 'application/vnd.twitchtv.v5+json'
+		}
+		
+		async function getCurrentUserId(){
+			let infoRaw = await fetch(`${apiRoot}/users`, {	headers	});
+			let info = await infoRaw.json();
+			user = info.data[0];
+		}
+
+		async function getAvailibleRedeems(){
+			let infoRaw = await fetch(`${apiRoot}/channel_points/custom_rewards?broadcaster_id=${user.id}`, {	headers	});
+			let info = await infoRaw.json();
+			let list =  document.getElementById("redeemList");
+			list.innerHTML = info.data.map(redeem => {
+				return `<div style="background-color: ${redeem.background_color}; width: 5rem; height: 5rem; background-image: url('${redeem.default_image.url_4x}');background-size: contain;" data-redeem-id="${redeem.id}">
+					${redeem.title}
+				</div>`;
+			})
+		}
+		getCurrentUserId();
+		
+	</script>
 </head>
+
 <body>
-	test
+	<button onclick="getAvailibleRedeems()" type="button">get redeems</button>
+	<ul id="redeemList"></ul>
 </body>
+
 </html>
