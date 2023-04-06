@@ -4,23 +4,80 @@
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
 	<title>Document</title>
+	<style>
+		.model_block {
+			width: 5rem;
+			height: 5rem;
+			background-color: red;
+		}
+
+		.model_block.selected {
+			background-color: green;
+		}
+	</style>
+
 	<script>
+		//utils
+		function sleep(ms) {
+			return new Promise(resolve => setTimeout(resolve, ms));
+		}
+
+		//TODO: call when the current token expired
+		function getNewTwitchToken() {
+			window.location.href = `https://id.twitch.tv/oauth2/authorize?client_id=${clientId}&response_type=token&scope=channel:read:redemptions+channel:manage:redemptions&redirect_uri=https://loupduqc.github.io/`;
+		}
+
+		async function updateTwitchRedeem(id, {enabled, paused}) {
+			let body = {}
+			if (enabled == "neutral" && paused == "neutral") {// nothing to change
+				return;
+			}
+			// bad code, but whatever
+			if (enabled == "on") {
+				body.is_enabled = true;
+			} else if (enabled == "off") {
+				body.is_enabled = false;
+			}
+
+			if (paused == "off") {
+				body.is_paused = true;
+			} else if (paused == "on") {
+				body.is_paused = false;
+			}
+			fetch(`${apiRoot}/channel_points/custom_rewards?broadcaster_id=${user.id}&id=${id}`, {
+				headers: {
+					...headers
+					// mode: "cors",
+					// 'Access-Control-Allow-Origin': '*',
+					// 'Access-Control-Allow-Headers': 'Origin, X-Requested-With, Content-Type, Accept, Z-Key',
+					// 'Access-Control-Allow-Methods': 'GET, HEAD, POST, PUT, DELETE, OPTIONS'
+				},
+				method: "PATCH",
+				body: JSON.stringify(body)
+			}).then(r => {
+				console.log("miaw");
+			}).catch(err => {
+				console.log(err);
+				debugger;
+			})
+				
+
+		}
+
+		//const
 		const apiRoot = "https://api.twitch.tv/helix";//prod
 		// const apiRoot = "http://localhost:8080/mock";//dev
 		const clientId = "hdree6yqc2ocem1fih17q6s3zlk4fs"
-		// const clientId = "d4abf18e7c5d76f74e2d2b72b628a2"
-		
-		if(document.location.hash == ""){// didn't get the token yet
-			window.location.href = `https://id.twitch.tv/oauth2/authorize?client_id=${clientId}&response_type=token&scope=channel:read:redemptions+channel:manage:redemptions&redirect_uri=https://loupduqc.github.io/`;
+		// const clientId = "f330721c54bb7b77fe3ec40a7d37ce"
+
+		if (document.location.hash == "") {// didn't get the token yet
+			getNewTwitchToken();
 		}
 		let hashData = {};
 		decodeURIComponent(document.location.hash).replace("#", "").split("&").forEach(line => {
 			let splitLine = line.split("=");
 			hashData[splitLine[0]] = splitLine[1];
 		});
-		debugger;
-		
-		
 		let user;
 		let token = hashData.access_token;
 		let headers = {
@@ -28,31 +85,233 @@
 			"Authorization": `Bearer ${token}`,
 			'accept': 'application/vnd.twitchtv.v5+json'
 		}
-		
-		async function getCurrentUserId(){
-			let infoRaw = await fetch(`${apiRoot}/users`, {	headers	});
+
+		async function getCurrentUserId() {
+			let infoRaw = await fetch(`${apiRoot}/users`, { headers });
 			let info = await infoRaw.json();
 			user = info.data[0];
 		}
 
-		async function getAvailibleRedeems(){
-			let infoRaw = await fetch(`${apiRoot}/channel_points/custom_rewards?broadcaster_id=${user.id}`, {	headers	});
+		async function getAvailibleRedeems() {
+			let infoRaw = await fetch(`${apiRoot}/channel_points/custom_rewards?broadcaster_id=${user.id}`, { headers });
 			let info = await infoRaw.json();
-			let list =  document.getElementById("redeemList");
-			list.innerHTML = info.data.map(redeem => {
-				return `<div style="background-color: ${redeem.background_color}; width: 5rem; height: 5rem; background-image: url('${redeem.default_image.url_4x}');background-size: contain;" data-redeem-id="${redeem.id}">
-					${redeem.title}
-				</div>`;
+			let list = document.getElementById("redeemList");
+			listeRedeems = info.data;
+			localStorage.redeemList = JSON.stringify(listeRedeems);
+			generateToggleTable();
+		}
+
+		let vtsSocket;
+		let listeModels = [];
+		let listeRedeems = [];
+		let modelRedeemsMode = {}
+
+		function getModelList() {
+			vtsSocket.send(JSON.stringify({
+				"apiName": "VTubeStudioPublicAPI",
+				"apiVersion": "1.0",
+				"messageType": "AvailableModelsRequest"
+			}));
+		}
+
+		async function updateModelList({ list, selected }) {
+			let element = document.getElementById("modelLlist");
+			if (list != undefined) {
+				listeModels = list;
+				localStorage.modelList = JSON.stringify(list);
+			};
+
+			if (selected != undefined) {
+				listeModels.forEach(model => {
+					model.modelLoaded = selected == model.modelID
+				});
+				if(selected != "empty" && selected != "error"){
+					for (let redeem in modelRedeemsMode[selected]) {
+						await updateTwitchRedeem(redeem, modelRedeemsMode[selected][redeem]);
+					}
+					
+				}
+			}
+			generateToggleTable();
+		}
+
+		function reloadListes() {
+			listeModels = JSON.parse(localStorage.modelList ?? "[]");
+			listeModels.forEach(model => {
+				model.modelLoaded = false;
+			});
+			listeRedeems = JSON.parse(localStorage.redeemList ?? "[]");
+			modelRedeemsMode = JSON.parse(localStorage.settings ?? "{}");
+			updateModelList({ selected: "empty" });
+		}
+
+		function vtsAccessPart1() {
+			if (localStorage.vtsToken != undefined) {
+				vtsSocket.send(JSON.stringify({
+					"apiName": "VTubeStudioPublicAPI",
+					"apiVersion": "1.0",
+					"requestID": "SomeID",
+					"messageType": "AuthenticationRequest",
+					"data": {
+						"pluginName": "Model based twitch redeem switcher",
+						"pluginDeveloper": "LoupDuQc",
+						"authenticationToken": localStorage.vtsToken
+					}
+				}));
+			} else {
+				vtsSocket.send(JSON.stringify({
+					"apiName": "VTubeStudioPublicAPI",
+					"apiVersion": "1.0",
+					"requestID": "LoupDuQc.twitchRedeemSwitcher",
+					"messageType": "AuthenticationTokenRequest",
+					"data": {
+						"pluginName": "Model based twitch redeem switcher",
+						"pluginDeveloper": "LoupDuQc",
+						// "pluginIcon": "iVBORw0.........KGgoA="
+					}
+				}));
+			}
+		}
+
+		async function initVTSWS() {
+			let statusElement = document.getElementById("vtsStatus");
+			console.log("a")
+			statusElement.innerHTML = "VTS: Connecting...";
+			vtsSocket = new WebSocket("ws://localhost:8001");
+
+
+			// Connection opened
+			vtsSocket.addEventListener("open", (event) => {
+				statusElement.innerHTML = "VTS: Connected...";
+				vtsAccessPart1();
+			});
+
+			// Listen for messages
+			vtsSocket.addEventListener("message", (event) => {
+				let data = JSON.parse(event.data);
+				if (data.messageType == "AuthenticationTokenResponse") {
+					localStorage.vtsToken = data.data.authenticationToken;
+					vtsSocket.send(JSON.stringify({
+						"apiName": "VTubeStudioPublicAPI",
+						"apiVersion": "1.0",
+						"requestID": "SomeID",
+						"messageType": "AuthenticationRequest",
+						"data": {
+							"pluginName": "Model based twitch redeem switcher",
+							"pluginDeveloper": "LoupDuQc",
+							"authenticationToken": localStorage.vtsToken
+						}
+					}));
+				} else if (data.messageType == "AuthenticationResponse") {
+					if (data.data.authenticated) {
+						vtsSocket.send(JSON.stringify({
+							"apiName": "VTubeStudioPublicAPI",
+							"apiVersion": "1.0",
+							"messageType": "EventSubscriptionRequest",
+							"data": {
+								"eventName": "ModelLoadedEvent",
+								"subscribe": true,
+								"config": {
+
+								}
+							}
+						}));
+						getModelList();
+					} else {
+						localStorage.removeItem("vtsToken");
+						vtsAccessPart1();
+					}
+				} else if (data.messageType == "ModelLoadedEvent") {
+					updateModelList({ selected: data.data.modelID });
+					console.log(`Loaded model ${data.data.modelName} with ID ${data.data.modelID}`)
+				} else if (data.messageType == "AvailableModelsResponse") {
+					updateModelList({ list: data.data.availableModels });
+				} else if (data.messageType == "APIError") {
+					if (data.data.errorID == 8) {
+						localStorage.removeItem("vtsToken");
+					}
+					vtsAccessPart1();
+				} else {
+					console.log(event.data);
+				}
+			});
+
+			vtsSocket.addEventListener("close", async (event) => {
+				statusElement.innerHTML = "VTS: Error";
+				updateModelList({ selected: "error" });
+				await sleep(1000);
+				initVTSWS();
+				console.log("c");
 			})
 		}
-		getCurrentUserId();
-		
+
+		function updateConfig(modelId, redeemId, type, value) {
+			modelRedeemsMode[modelId][redeemId][type] = value;
+			localStorage.settings = JSON.stringify(modelRedeemsMode)
+		}
+
+		function generateToggleTable() {
+			let tableElement = document.getElementById("toggles");
+			let body = "";
+			body += "<tr>";
+			body += `<th></th>`
+			for (let model of listeModels) {
+				body += `<th class="model_block ${model.modelLoaded ? "selected" : ""}" data-redeem-id="${model.modelID}">
+					${model.modelName}
+				</th>`
+			}
+			body += "</tr>";
+			for (let redeem of listeRedeems) {
+				body += "<tr>";
+				body += `<th style="background-color: ${redeem.background_color}; width: 5rem; height: 5rem; background-image: url('${redeem.default_image.url_4x}');background-size: contain;" data-redeem-id="${redeem.id}">
+					${redeem.title}
+				</th>`
+				for (let model of listeModels) {
+					modelRedeemsMode[model.modelID] ??= {};
+					modelRedeemsMode[model.modelID][redeem.id] ??= {};
+					modelRedeemsMode[model.modelID][redeem.id].enabled ??= "neutral";
+					modelRedeemsMode[model.modelID][redeem.id].pause ??= "neutral";
+					body += `<td>
+						<select onchange="updateConfig('${model.modelID}', '${redeem.id}', 'enabled', this.value)">
+							<optgroup label="Enable/Disabled">
+								<option value="on" ${modelRedeemsMode[model.modelID][redeem.id].enabled == "on" ? "selected" : ""}>Enabled</option>
+								<option value="off" ${modelRedeemsMode[model.modelID][redeem.id].enabled == "off" ? "selected" : ""}>Disabled</option>
+								<option value="neutral" ${modelRedeemsMode[model.modelID][redeem.id].enabled == "neutral" ? "selected" : ""}>Ignored</option>
+							</optgroup>
+						</select>
+						<select onchange="updateConfig('${model.modelID}', '${redeem.id}', 'pause', this.value)">
+							<optgroup label="Pause/Unpause">
+								<option value="off" ${modelRedeemsMode[model.modelID][redeem.id].pause == "off" ? "selected" : ""}>Paused</option>
+								<option value="on" ${modelRedeemsMode[model.modelID][redeem.id].pause == "on" ? "selected" : ""}>Unpaused</option>
+								<option value="neutral" ${modelRedeemsMode[model.modelID][redeem.id].pause == "neutral" ? "selected" : ""}>Ignored</option>
+							</optgroup>
+						</select>
+					</td>`;
+				}
+				body += "</tr>";
+			}
+			tableElement.innerHTML = body;
+		}
+
 	</script>
 </head>
 
 <body>
-	<button onclick="getAvailibleRedeems()" type="button">get redeems</button>
+	<p id="vtsStatus"></p>
+	<button onclick="getAvailibleRedeems()" type="button">Update redeems</button>
+	<button onclick="getModelList()" type="button">Update models</button>
 	<ul id="redeemList"></ul>
+	<ul id="modelLlist"></ul>
+	<table>
+		<tbody id="toggles">
+
+		</tbody>
+	</table>
+	<script>
+		reloadListes();
+		initVTSWS();
+		getCurrentUserId();
+	</script>
 </body>
 
 </html>
